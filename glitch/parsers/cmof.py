@@ -1146,7 +1146,6 @@ class PuppetParser(p.Parser):
 
             unit_block.line, unit_block.column = codeelement.line, codeelement.col
             unit_block.code = get_code(codeelement)
-
             return unit_block
         elif (isinstance(codeelement, puppetmodel.Parameter)):
             # FIXME Parameters are not yet supported
@@ -1180,12 +1179,15 @@ class PuppetParser(p.Parser):
                 variable.code = get_code(codeelement)
                 return variable
             else:
-                res = []
+                variable: Variable = Variable(name, None, False)
+                variable.line, variable.column = codeelement.line, codeelement.col
+                variable.code = get_code(codeelement) 
                 for key, value in temp_value.items():
-                    res.append(PuppetParser.__process_codeelement(
+                    variable.variables.append(PuppetParser.__process_codeelement(
                         puppetmodel.Assignment(codeelement.line, codeelement.col,
-                                               codeelement.end_line, codeelement.end_col, name + "." + key, value), path, code))
-                return res
+                                               codeelement.end_line, codeelement.end_col, key, value), path, code))
+                
+                return variable
         elif (isinstance(codeelement, puppetmodel.PuppetClass)):
             # FIXME there are components of the class that are not considered
             unit_block: UnitBlock = UnitBlock(
