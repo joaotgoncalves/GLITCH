@@ -58,11 +58,19 @@ class SecurityVisitor(RuleVisitor):
         return []
 
     # FIXME attribute and variables need to have superclass
-    def __check_keyvalue(self, c: CodeElement, name: str, 
-            value: str, has_variable: bool, file: str):
+    def __check_keyvalue(self, c: CodeElement, name: str,
+                         value: str, has_variable: bool, file: str):
         errors = []
-        name = name.split('.')[-1].strip().lower()
-        if (isinstance(value, str)):
+        name = name.strip().lower()
+        if (isinstance(value, type(None))):
+            if (isinstance(c, Attribute)):
+                for attribute in c.attributes:
+                    errors += self.check_element(attribute, file)
+            elif (isinstance(c, Variable)):
+                for variable in c.variables:
+                    errors += self.check_element(variable, file)
+            return errors
+        elif (isinstance(value, str)):
             value = value.strip().lower()
         else:
             errors += self.check_element(value, file)
@@ -70,7 +78,7 @@ class SecurityVisitor(RuleVisitor):
 
         try:
             if (re.match(SecurityVisitor.__URL_REGEX, value) and
-                ('http' in value or 'www' in value) and 'https' not in value):
+                    ('http' in value or 'www' in value) and 'https' not in value):
                 errors.append(Error('sec_https', c, file, repr(c)))
 
             parsed_url = urlparse(value)
@@ -93,9 +101,9 @@ class SecurityVisitor(RuleVisitor):
                         break
 
                 if not whitelist:
-                    errors.append(Error('sec_weak_crypt', c, file, repr(c)))   
+                    errors.append(Error('sec_weak_crypt', c, file, repr(c)))
 
-        for check in SecurityVisitor.__CHECKSUM:     
+        for check in SecurityVisitor.__CHECKSUM:
             if (check in name and (value == 'no' or value == 'false')):
                 errors.append(Error('sec_no_int_check', c, file, repr(c)))
                 break
@@ -108,8 +116,8 @@ class SecurityVisitor(RuleVisitor):
                             errors.append(Error('sec_def_admin', c, file, repr(c)))
                             break
 
-        for item in (SecurityVisitor.__PASSWORDS + 
-                SecurityVisitor.__SECRETS + SecurityVisitor.__USERS):
+        for item in (SecurityVisitor.__PASSWORDS +
+                     SecurityVisitor.__SECRETS + SecurityVisitor.__USERS):
             if (re.match(r'[_A-Za-z0-9$\/\.\[\]-]*{text}\b'.format(text=item), name) and not has_variable):
                 errors.append(Error('sec_hard_secr', c, file, repr(c)))
 
@@ -120,7 +128,7 @@ class SecurityVisitor(RuleVisitor):
 
                 if (item in SecurityVisitor.__PASSWORDS and len(value) == 0):
                     errors.append(Error('sec_empty_pass', c, file, repr(c)))
-                    
+
                 break
 
         for item in SecurityVisitor.__SSH_DIR:
@@ -129,7 +137,7 @@ class SecurityVisitor(RuleVisitor):
                     errors.append(Error('sec_hard_secr', c, file, repr(c)))
 
         for item in SecurityVisitor.__MISC_SECRETS:
-            if (re.match(r'([_A-Za-z0-9$-]*[-_]{text}([-_].*)?$)|(^{text}([-_].*)?$)'.format(text=item), name) 
+            if (re.match(r'([_A-Za-z0-9$-]*[-_]{text}([-_].*)?$)|(^{text}([-_].*)?$)'.format(text=item), name)
                     and len(value) > 0 and not has_variable):
                 errors.append(Error('sec_hard_secr', c, file, repr(c)))
 

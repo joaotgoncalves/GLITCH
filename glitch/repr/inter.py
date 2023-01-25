@@ -70,15 +70,24 @@ class Variable(CodeElement):
         self.name: str = name
         self.value: str = value
         self.has_variable: bool = has_variable
+        self.variables: list = []
 
     def __repr__(self) -> str:
         value = repr(self.value).split('\n')[0]
-        name = self.name.split('.')[-1]
-        return f"{name}:{value}"
+        name = self.name  # .split('.')[-1]
+        if value == "None":
+            variables = self.variables
+            return f"{name}:{value}:{variables}"
+        else:
+            return f"{name}:{value}"
 
     def print(self, tab) -> str:
         if isinstance(self.value, str):
             return (tab * "\t") + self.name + "->" + self.value + \
+                " (on line " + str(self.line) + f" {self.has_variable})"
+        elif isinstance(self.value, type(None)):
+            return (tab * "\t") + self.name + "->" + None + \
+                " variables:" + f" {self.variables}" + \
                 " (on line " + str(self.line) + f" {self.has_variable})"
         else:
             return (tab * "\t") + self.name + "->" + repr(self.value) + \
@@ -90,15 +99,24 @@ class Attribute(CodeElement):
         self.name: str = name
         self.value: str = value
         self.has_variable: bool = has_variable
+        self.attributes: list = []
 
     def __repr__(self) -> str:
         value = repr(self.value).split('\n')[0]
-        name = self.name.split('.')[-1]
-        return f"{name}:{value}"
+        name = self.name  # .split('.')[-1]
+        if value == "None":
+            attributes = self.attributes
+            return f"{name}:{value}:{attributes}"
+        else:
+            return f"{name}:{value}"
 
     def print(self, tab) -> str:
         if isinstance(self.value, str):
             return (tab * "\t") + self.name + "->" + self.value + \
+                " (on line " + str(self.line) + f" {self.has_variable})"
+        elif isinstance(self.value, type(None)):
+            return (tab * "\t") + self.name + "->" + None + \
+                " attributes:" + f" {self.attributes}" + \
                 " (on line " + str(self.line) + f" {self.has_variable})"
         else:
             return (tab * "\t") + self.name + "->" + repr(self.value) + \
@@ -118,8 +136,8 @@ class AtomicUnit(Block):
         return f"{self.name} {self.type}"
 
     def print(self, tab) -> str:
-        res = ((tab * "\t") + self.type + ' ' + self.name + " (on line " 
-                + str(self.line) + ")\n")
+        res = ((tab * "\t") + self.type + ' ' + self.name + " (on line "
+               + str(self.line) + ")\n")
 
         for attribute in self.attributes:
             res += attribute.print(tab + 1) + "\n"
@@ -185,7 +203,7 @@ class UnitBlock(Block):
 
     def print(self, tab) -> str:
         res = (tab * "\t") + self.name + "\n"
-        
+
         res += (tab * "\t") + "\tdependencies:\n"
         for dependency in self.dependencies:
             res += dependency.print(tab + 2) + "\n"
@@ -279,7 +297,7 @@ class Project:
 
     def add_module(self, m: Module):
         self.modules.append(m)
-    
+
     def add_block(self, u: UnitBlock):
         self.blocks.append(u)
 

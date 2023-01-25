@@ -67,7 +67,7 @@ class AnsibleParser(p.Parser):
 
                 while comment not in f_lines[aux]:
                     aux += 1
-                comments.append((aux + 1, comment))      
+                comments.append((aux + 1, comment))
 
         for i, line in enumerate(f_lines):
             if line.strip().startswith("#"):
@@ -86,10 +86,10 @@ class AnsibleParser(p.Parser):
             res = code[start_token.start_mark.line][start_token.start_mark.column : end_token.end_mark.column]
         else:
             res = code[start_token.start_mark.line]
-        
+
         for line in range(start_token.start_mark.line + 1, end_token.end_mark.line):
             res += code[line]
-        
+
         if start_token.start_mark.line != end_token.end_mark.line:
             res += code[end_token.end_mark.line][:end_token.end_mark.column]
 
@@ -97,56 +97,92 @@ class AnsibleParser(p.Parser):
 
     @staticmethod
     def __parse_vars(unit_block, cur_name, token, code):
-        def create_variable(name, value):
-            has_variable = ("{{" in value) and ("}}" in value)
+        def create_variable(token, name, value, child=False) -> Variable:
+            has_variable = (("{{" in value) and ("}}" in value)) if value != None else False
             if (value in ["null", "~"]): value = ""
             v = Variable(name, value, has_variable)
             v.line = token.start_mark.line + 1
-            v.code = AnsibleParser.__get_element_code(token, value, code)
+            if value == None:
+                v.code = AnsibleParser.__get_element_code(token, token, code)
+            else:
+                v.code = AnsibleParser.__get_element_code(token, value, code)
             v.code = ''.join(code[token.start_mark.line : token.end_mark.line + 1])
-            unit_block.add_variable(v)
 
+            variables.append(v)
+            if not child:
+                unit_block.add_variable(v)
+            return v
+
+        def process_var(key, v, child: bool = False):
+            if isinstance(v,  MappingNode):
+                var = create_variable(v, key.value, None, child)
+                aux_vars = []
+                aux_vars += AnsibleParser.__parse_vars(
+                    unit_block, key.value, v, code)
+                var.variables = aux_vars
+            elif isinstance(v, ScalarNode):
+                create_variable(v, key.value, str(v.value), child)
+            elif isinstance(v, SequenceNode):
+                value = []
+                for i, val in enumerate(v.value):
+                    if isinstance(val, CollectionNode):
+                        var = create_variable(val,
+                                              f"{key.value}[{i}]", None, child)
+                        aux_vars = []
+                        aux_vars += AnsibleParser.__parse_vars(
+                            unit_block, f"{key.value}[{i}]", val, code)
+                        var.variables = aux_vars
+                    else:
+                        value.append(val.value)
+
+                if (len(value) > 0):
+                    create_variable(v, key.value, str(value), child)
+
+        variables = []
         if isinstance(token, MappingNode):
             for key, v in token.value:
                 if hasattr(key, "value") and isinstance(key.value, str):
-                    AnsibleParser.__parse_vars(unit_block, cur_name + key.value + ".", v, code)
+                    if cur_name == "":
+                        process_var(key, v)
+                    else:
+                        process_var(key, v, True)
                 elif isinstance(key.value, MappingNode):
                     AnsibleParser.__parse_vars(unit_block, cur_name, key.value[0][0], code)
-        elif isinstance(token, SequenceNode):
-            value = []
-            for i, v in enumerate(token.value):
-                if isinstance(v, CollectionNode):
-                    AnsibleParser.__parse_vars(unit_block, f"{cur_name[:-1]}[{i}].", v, code)
-                else:
-                    value.append(v.value)
+        elif isinstance(token, SequenceNode) or isinstance(token, ScalarNode):
+            pass  # can't happen, if it happens is not syntatically right so it ignores
 
-            if (len(value) > 0):
-                create_variable(cur_name[:-1], str(value))
-        elif cur_name != "":
-            create_variable(cur_name[:-1], str(token.value))
+        return variables
 
     @staticmethod
     def __parse_attribute(cur_name, token, val, code):
-        def create_attribute(token, name, value):
-            has_variable = ("{{" in value) and ("}}" in value)
+        def create_attribute(token, name, value) -> Attribute:
+            has_variable = (("{{" in value) and ("}}" in value)) if value != None else False
             if (value in ["null", "~"]): value = ""
             a = Attribute(name, value, has_variable)
             a.line = token.start_mark.line + 1
-            a.code = AnsibleParser.__get_element_code(token, val, code)
+            if val == None:
+                a.code = AnsibleParser.__get_element_code(token, token, code)
+            else:
+                a.code = AnsibleParser.__get_element_code(token, val, code)
             attributes.append(a)
+
+            return a
 
         attributes = []
         if isinstance(val, MappingNode):
+            attribute = create_attribute(token, cur_name, None)
+            aux_attributes = []
             for aux, aux_val in val.value:
-                attributes += AnsibleParser.__parse_attribute(f"{cur_name}.{aux.value}", 
-                        aux, aux_val, code)
+                aux_attributes += AnsibleParser.__parse_attribute(f"{aux.value}",
+                                                                  aux, aux_val, code)
+            attribute.attributes = aux_attributes
         elif isinstance(val, ScalarNode):
             create_attribute(token, cur_name, str(val.value))
         elif isinstance(val, SequenceNode):
             value = []
             for i, v in enumerate(val.value):
                 if not isinstance(v, ScalarNode):
-                    attributes += AnsibleParser.__parse_attribute(f"{cur_name}[{i}]", token, v, code)
+                    attributes += AnsibleParser.__parse_attribute(f"{cur_name}[{i}]", v, v, code)
                 else:
                     value.append(v.value)
 
@@ -314,7 +350,7 @@ class AnsibleParser(p.Parser):
                 and not os.path.islink(path):
             files = [f for f in os.listdir(path) \
                 if os.path.isfile(os.path.join(path, f))
-                    and not f.startswith('.') and f.endswith(('.yml', '.yaml'))]
+                     and not f.startswith('.') and f.endswith(('.yml', '.yaml'))]
             for file in files:
                 f_path = os.path.join(path, file)
                 with open(f_path) as f:
@@ -356,14 +392,14 @@ class AnsibleParser(p.Parser):
         AnsibleParser.__apply_to_files(res, f"{path}/tasks", self.__parse_tasks_file)
 
         if os.path.exists(f"{path}/roles") and not os.path.islink(f"{path}/roles"):
-            subfolders = [f.path for f in os.scandir(f"{path}/roles") 
-                if f.is_dir() and not f.is_symlink()]
+            subfolders = [f.path for f in os.scandir(f"{path}/roles")
+                          if f.is_dir() and not f.is_symlink()]
             for m in subfolders:
                 res.add_module(self.parse_module(m))
 
         # Check subfolders
-        subfolders = [f.path for f in os.scandir(f"{path}") 
-            if f.is_dir() and not f.is_symlink()]
+        subfolders = [f.path for f in os.scandir(f"{path}")
+                      if f.is_dir() and not f.is_symlink()]
         for d in subfolders:
             if os.path.basename(os.path.normpath(d)) not \
                     in ["playbooks", "group_vars", "host_vars", "tasks", "roles"]:
@@ -393,14 +429,14 @@ class AnsibleParser(p.Parser):
                         if key[0].value == "hosts":
                             hosts = True
                             break
-                    
+
                     blocktype = UnitBlockType.script if hosts else UnitBlockType.tasks
                 elif isinstance(parsed_file, SequenceNode) and len(parsed_file.value) == 0:
                     blocktype = UnitBlockType.script
                 else:
                     throw_exception(EXCEPTIONS["ANSIBLE_FILE_TYPE"], path)
                     return None
-        
+
             if (blocktype == UnitBlockType.script):
                 return self.__parse_playbook(path, f, parsed_file=parsed_file)
             elif (blocktype == UnitBlockType.tasks):
@@ -445,7 +481,7 @@ class ChefParser(p.Parser):
             return len(ast.args) > 0 and ChefParser._check_has_variable(ast.args[0])
         elif (ChefParser._check_node(ast, ["binary"], 3)):
             return ChefParser._check_has_variable(ast.args[0]) and \
-                    ChefParser._check_has_variable(ast.args[2])
+                ChefParser._check_has_variable(ast.args[2])
         else:
             return ChefParser._check_id(ast, references)
 
@@ -457,7 +493,7 @@ class ChefParser(p.Parser):
         start_line, start_column = float('inf'), float('inf')
         end_line, end_column = 0, 0
         bounded_structures = \
-            ["brace_block", "arg_paren", "string_literal", 
+            ["brace_block", "arg_paren", "string_literal",
                 "string_embexpr", "aref", "array", "args_add_block"]
 
         if (isinstance(ast, ChefParser.Node) and len(ast.args) > 0 and is_bounds(ast.args[-1])):
@@ -468,7 +504,7 @@ class ChefParser(p.Parser):
 
             # With identifiers we need to consider the : behind them
             if (ChefParser._check_id(ast, ["@ident"])
-                and source[start_line - 1][start_column - 1] == ":"):
+                    and source[start_line - 1][start_column - 1] == ":"):
                 start_column -= 1
             elif ChefParser._check_id(ast, ["@tstring_content"]):
                 end_line += ast.args[0].count('\\n')
@@ -500,7 +536,7 @@ class ChefParser(p.Parser):
                         break
                     elif not c.isspace(): break
 
-                if (ChefParser._check_id(ast, ['string_embexpr']) 
+                if (ChefParser._check_id(ast, ['string_embexpr'])
                         and source[start_line - 1][start_column] == "{" and
                         source[start_line - 1][start_column - 1] == "#"):
                     start_column -= 1
@@ -549,7 +585,7 @@ class ChefParser(p.Parser):
         res = res.strip()
         if res.startswith(('"', "'")) and res.endswith(('"', "'")):
             res = res[1:-1]
-        
+
         return remove_unmatched_brackets(res)
 
     @staticmethod
@@ -586,7 +622,7 @@ class ChefParser(p.Parser):
         def __init__(self, atomic_unit, source, ast):
             super().__init__(source)
             self.push([self.is_block_resource,
-                self.is_inline_resource], ast)
+                       self.is_inline_resource], ast)
             self.atomic_unit = atomic_unit
 
         def is_block_resource(self, ast):
@@ -605,7 +641,7 @@ class ChefParser(p.Parser):
                 ChefParser._check_id(ast.args[0], ["@ident"])
                     and ChefParser._check_node(ast.args[1], ["args_add_block"], 2)):
                 self.push([self.is_resource_body_without_attributes,
-                    self.is_inline_resource_name], ast.args[1])
+                           self.is_inline_resource_name], ast.args[1])
                 self.push([self.is_resource_type], ast.args[0])
                 self.atomic_unit.code = ChefParser._get_content(ast, self.source)
                 self.atomic_unit.line = ChefParser._get_content_bounds(ast, self.source)[0]
@@ -614,7 +650,7 @@ class ChefParser(p.Parser):
 
         def is_resource_def(self, ast):
             if (ChefParser._check_node(ast.args[0], ["@ident"], 2)
-                and ChefParser._check_node(ast.args[1], ["args_add_block"], 2)):
+                    and ChefParser._check_node(ast.args[1], ["args_add_block"], 2)):
                 self.push([self.is_resource_name], ast.args[1])
                 self.push([self.is_resource_type], ast.args[0])
                 return True
@@ -640,7 +676,7 @@ class ChefParser(p.Parser):
 
         def is_inline_resource_name(self, ast):
             if (ChefParser._check_node(ast.args[0][0], ["method_add_block"], 2)
-                and ast.args[1] is False):
+                    and ast.args[1] is False):
                 resource_id = ast.args[0][0].args[0]
                 self.atomic_unit.name = ChefParser._get_content(resource_id, self.source)
                 self.push([self.is_attribute], ast.args[0][0].args[1])
@@ -663,18 +699,18 @@ class ChefParser(p.Parser):
             if (ChefParser._check_node(ast, ["method_add_arg"], 2)
                     and ChefParser._check_id(ast.args[0], ["call"])):
                 self.push([self.is_attribute], ast.args[0].args[0])
-            elif ((ChefParser._check_id(ast, ["command", "method_add_arg"]) 
-                        and ast.args[1] != []) or
-                            (ChefParser._check_id(ast, ["method_add_block"]) and
-                                ChefParser._check_id(ast.args[0], ["method_add_arg"]) and
-                                    ChefParser._check_id(ast.args[1], ["brace_block", "do_block"]))):
+            elif ((ChefParser._check_id(ast, ["command", "method_add_arg"])
+                   and ast.args[1] != []) or
+                  (ChefParser._check_id(ast, ["method_add_block"]) and
+                   ChefParser._check_id(ast.args[0], ["method_add_arg"]) and
+                   ChefParser._check_id(ast.args[1], ["brace_block", "do_block"]))):
                 has_variable = ChefParser._check_has_variable(ast.args[1])
                 value = ChefParser._get_content(ast.args[1], self.source)
-                if value == "nil": 
+                if value == "nil":
                     value = ""
                     has_variable = False
                 a = Attribute(ChefParser._get_content(ast.args[0], self.source),
-                        value, has_variable)
+                              value, has_variable)
                 a.line = ChefParser._get_content_bounds(ast, self.source)[0]
                 a.code = ChefParser._get_source(ast, self.source)
                 self.atomic_unit.add_attribute(a)
@@ -691,45 +727,90 @@ class ChefParser(p.Parser):
             self.push([self.is_variable], ast)
 
         def is_variable(self, ast):
-            def parse_variable(ast, key, current_name, value_ast):
+            def create_variable(key, name, value, has_variable):
+                variable = Variable(name, value, has_variable)
+                variable.line = ChefParser._get_content_bounds(key, self.source)[
+                    0]
+                variable.code = ChefParser._get_source(
+                    ast, self.source)
+                return variable
+
+            def parse_variable(parent, ast, key, current_name, value_ast):
                 if ChefParser._check_node(value_ast, ["hash"], 1) \
-                    and ChefParser._check_id(value_ast.args[0], ["assoclist_from_args"]):
-                        for assoc in value_ast.args[0].args[0]:
-                            parse_variable(ast, assoc.args[0], current_name + "." +
-                                ChefParser._get_content(assoc.args[0], self.source), 
-                                    assoc.args[1])
+                        and ChefParser._check_id(value_ast.args[0], ["assoclist_from_args"]):
+                    variable = create_variable(key, current_name, None, False)
+                    if parent == None:
+                        self.variables.append(variable)
+                    else:
+                        parent.variables.append(variable)
+                    parent = variable
+                    for assoc in value_ast.args[0].args[0]:
+                        parse_variable(parent, ast, assoc.args[0], ChefParser._get_content(
+                            assoc.args[0], self.source),
+                            assoc.args[1])
                 else:
                     value = ChefParser._get_content(value_ast, self.source)
                     has_variable = ChefParser._check_has_variable(value_ast)
-                    if value == "nil": 
+                    if value == "nil":
                         value = ""
                         has_variable = False
-                    variable = Variable(current_name, value, has_variable)
-                    variable.line = ChefParser._get_content_bounds(key, self.source)[0]
-                    variable.code = ChefParser._get_source(ast, self.source)
-                    self.variables.append(variable)
+
+                    variable = create_variable(
+                        key, current_name, value, has_variable)
+
+                    if parent == None:
+                        self.variables.append(variable)
+                    else:
+                        parent.variables.append(variable)
 
             if ChefParser._check_node(ast, ["assign"], 2):
+                def get_parent(parent_name, vars):
+                    for var in vars:
+                        if var.name == parent_name:
+                            return var
+                    return None
+
                 name = ""
-                names = ChefParser._get_content(ast.args[0], self.source).split("[")
-                for n in names:
+                names = ChefParser._get_content(
+                    ast.args[0], self.source).split("[")
+                parent = None
+                for i, n in enumerate(names):
                     if n.endswith("]"):
                         n = n[:-1]
                     if (n.startswith("'") and n.endswith("'")) or \
                             (n.startswith('"') and n.endswith('"')):
-                        name += n[1:-1]
+                        name = n[1:-1]
                     elif n.startswith(":"):
-                        name += n[1:]
+                        name = n[1:]
                     else:
-                        name += n
+                        name = n
 
-                    name += "."
-                name = name[:-1]
-                parse_variable(ast, ast.args[0], name, ast.args[1])
+                    if i == len(names) - 1:
+                        parse_variable(
+                            parent, ast, ast.args[0], name, ast.args[1])
+                    else:
+                        if i == 0:
+                            parent = get_parent(name, self.variables)
+                            if parent == None:
+                                variable = create_variable(
+                                    ast.args[0], name, None, False)
+                                self.variables.append(variable)
+                                parent = variable
+                            else:
+                                pass
+                        else:
+                            next_parent = get_parent(name, parent.variables)
+                            if next_parent == None:
+                                variable = create_variable(
+                                    ast.args[0], name, None, False)
+                                parent.variables.append(variable)
+                                parent = variable
+                            else:
+                                parent = next_parent
                 return True
 
             return False
-
+            
     class IncludeChecker(Checker):
         def __init__(self, source, ast):
             super().__init__(source)
@@ -737,9 +818,9 @@ class ChefParser(p.Parser):
             self.code = ""
 
         def is_include(self, ast):
-            if (ChefParser._check_node(ast, ["command"], 2) 
+            if (ChefParser._check_node(ast, ["command"], 2)
                     and ChefParser._check_id(ast.args[0], ["@ident"])
-                        and ChefParser._check_node(ast.args[1], ["args_add_block"], 2)):
+                    and ChefParser._check_node(ast.args[1], ["args_add_block"], 2)):
                 self.push([self.is_include_name], ast.args[1])
                 self.push([self.is_include_type], ast.args[0])
                 self.code = ChefParser._get_source(ast, self.source)
@@ -748,7 +829,7 @@ class ChefParser(p.Parser):
 
         def is_include_type(self, ast):
             if (isinstance(ast.args[0], str) and isinstance(ast.args[1], list)
-                and ast.args[0] == "include_recipe"):
+                    and ast.args[0] == "include_recipe"):
                 return True
             return False
 
@@ -810,7 +891,7 @@ class ChefParser(p.Parser):
                     is_default=True
                 )
                 self.current_condition.else_statement.line = \
-                        ChefParser._get_content_bounds(ast, self.source)[0]
+                    ChefParser._get_content_bounds(ast, self.source)[0]
                 return True
             return False
 
@@ -884,11 +965,11 @@ class ChefParser(p.Parser):
             else:
                 unit_block: UnitBlock = UnitBlock(file, UnitBlockType.script)
             unit_block.path = os.path.join(path, file)
-            
+
             try:
                 source = f.readlines()
             except:
-                    throw_exception(EXCEPTIONS["CHEF_COULD_NOT_PARSE"], os.path.join(path, file))
+                throw_exception(EXCEPTIONS["CHEF_COULD_NOT_PARSE"], os.path.join(path, file))
 
             with tempfile.NamedTemporaryFile(mode="w+") as tmp:
                 tmp.write(ripper_script)
@@ -951,16 +1032,16 @@ class ChefParser(p.Parser):
         res.add_module(self.parse_module(path))
 
         if (os.path.exists(f"{path}/cookbooks")):
-            cookbooks = [f.path for f in os.scandir(f"{path}/cookbooks") 
-                if f.is_dir() and not f.is_symlink()]
+            cookbooks = [f.path for f in os.scandir(f"{path}/cookbooks")
+                         if f.is_dir() and not f.is_symlink()]
             for cookbook in cookbooks:
                 res.add_module(self.parse_module(cookbook))
 
-        subfolders = [f.path for f in os.scandir(f"{path}") 
-            if f.is_dir() and not f.is_symlink()]
+        subfolders = [f.path for f in os.scandir(f"{path}")
+                      if f.is_dir() and not f.is_symlink()]
         for d in subfolders:
             if os.path.basename(os.path.normpath(d)) not \
-                    in ["cookbooks", "resources", "attributes", "recipes", 
+                    in ["cookbooks", "resources", "attributes", "recipes",
                         "definitions", "libraries", "providers"]:
                 aux = self.parse_folder(d)
                 res.blocks += aux.blocks
@@ -994,15 +1075,15 @@ class PuppetParser(p.Parser):
                 res = code[ce.line - 1][ce.col - 1 : ce.end_col - 1]
             else:
                 res = code[ce.line - 1]
-            
+
             for line in range(ce.line, ce.end_line - 1):
                 res += code[line]
-            
+
             if ce.line != ce.end_line:
                 res += code[ce.end_line - 1][:ce.end_col - 1]
 
             return res
-        
+
         if (isinstance(codeelement, puppetmodel.Value)):
             if isinstance(codeelement, puppetmodel.Hash):
                 res = {}
@@ -1031,24 +1112,24 @@ class PuppetParser(p.Parser):
             return attribute
         elif (isinstance(codeelement, puppetmodel.Resource)):
             resource: AtomicUnit = AtomicUnit(
-                PuppetParser.__process_codeelement(codeelement.title, path, code), 
+                PuppetParser.__process_codeelement(codeelement.title, path, code),
                 PuppetParser.__process_codeelement(codeelement.type, path, code)
             )
             for attr in codeelement.attributes:
                 resource.add_attribute(PuppetParser.__process_codeelement(attr, path, code))
             resource.line, resource.column = codeelement.line, codeelement.col
             resource.code = get_code(codeelement)
-            return resource 
+            return resource
         elif (isinstance(codeelement, puppetmodel.ClassAsResource)):
             resource: AtomicUnit = AtomicUnit(
-                PuppetParser.__process_codeelement(codeelement.title, path, code), 
+                PuppetParser.__process_codeelement(codeelement.title, path, code),
                 "class"
             )
             for attr in codeelement.attributes:
                 resource.add_attribute(PuppetParser.__process_codeelement(attr, path, code))
             resource.line, resource.column = codeelement.line, codeelement.col
             resource.code = get_code(codeelement)
-            return resource 
+            return resource
         elif (isinstance(codeelement, puppetmodel.ResourceDeclaration)):
             unit_block: UnitBlock = UnitBlock(
                 PuppetParser.__process_codeelement(codeelement.name, path, code),
@@ -1076,7 +1157,7 @@ class PuppetParser(p.Parser):
             else:
                 value = None
             has_variable = not isinstance(value, str) or temp_value.startswith("$") or \
-                    codeelement.default is None
+                codeelement.default is None
             attribute = Attribute(
                 name,
                 value,
@@ -1102,8 +1183,8 @@ class PuppetParser(p.Parser):
                 res = []
                 for key, value in temp_value.items():
                     res.append(PuppetParser.__process_codeelement(
-                            puppetmodel.Assignment(codeelement.line, codeelement.col, 
-                                    codeelement.end_line, codeelement.end_col, name + "." + key, value), path, code))
+                        puppetmodel.Assignment(codeelement.line, codeelement.col,
+                                               codeelement.end_line, codeelement.end_col, name + "." + key, value), path, code))
                 return res
         elif (isinstance(codeelement, puppetmodel.PuppetClass)):
             # FIXME there are components of the class that are not considered
@@ -1136,21 +1217,21 @@ class PuppetParser(p.Parser):
             elif codeelement.operator == "[]":
                 return \
                     (PuppetParser.__process_codeelement(codeelement.arguments[0], path, code)
-                        + "[" + 
-                    ','.join(PuppetParser.__process_codeelement(codeelement.arguments[1], path, code))
+                        + "[" +
+                     ','.join(PuppetParser.__process_codeelement(codeelement.arguments[1], path, code))
                         + "]")
             elif len(codeelement.arguments) == 2:
                 return \
                     (str(PuppetParser.__process_codeelement(codeelement.arguments[0], path, code))
-                        + codeelement.operator + 
-                    str(PuppetParser.__process_codeelement(codeelement.arguments[1], path, code)))
+                        + codeelement.operator +
+                     str(PuppetParser.__process_codeelement(codeelement.arguments[1], path, code)))
             elif codeelement.operator == "[,]":
                 return \
                     (PuppetParser.__process_codeelement(codeelement.arguments[0], path, code)
                         + "[" +
-                    PuppetParser.__process_codeelement(codeelement.arguments[1], path, code)
-                        + "," + 
-                    PuppetParser.__process_codeelement(codeelement.arguments[2], path, code)
+                     PuppetParser.__process_codeelement(codeelement.arguments[1], path, code)
+                        + "," +
+                     PuppetParser.__process_codeelement(codeelement.arguments[2], path, code)
                         + "]")
         elif (isinstance(codeelement, puppetmodel.Lambda)):
             # FIXME Lambdas are not yet supported
@@ -1170,19 +1251,19 @@ class PuppetParser(p.Parser):
             res = res[:-1]
             res += ")"
             lamb = PuppetParser.__process_codeelement(codeelement.lamb, path, code)
-            if lamb != "": return [res] + lamb 
+            if lamb != "": return [res] + lamb
             else: return res
         elif (isinstance(codeelement, puppetmodel.If)):
             # FIXME Conditionals are not yet supported
-            res = list(map(lambda ce: PuppetParser.__process_codeelement(ce, path, code), 
-                    codeelement.block))
+            res = list(map(lambda ce: PuppetParser.__process_codeelement(ce, path, code),
+                           codeelement.block))
             if (codeelement.elseblock is not None):
                 res += PuppetParser.__process_codeelement(codeelement.elseblock, path, code)
             return res
         elif (isinstance(codeelement, puppetmodel.Unless)):
             # FIXME Conditionals are not yet supported
-            res = list(map(lambda ce: PuppetParser.__process_codeelement(ce, path, code), 
-                    codeelement.block))
+            res = list(map(lambda ce: PuppetParser.__process_codeelement(ce, path, code),
+                           codeelement.block))
             if (codeelement.elseblock is not None):
                 res += PuppetParser.__process_codeelement(codeelement.elseblock, path, code)
             return res
@@ -1224,13 +1305,13 @@ class PuppetParser(p.Parser):
                 expressions = PuppetParser.__process_codeelement(match.expressions, path, code)
                 for expression in expressions:
                     if expression != "default":
-                        condition = ConditionStatement(control + "==" + expression, 
-                            ConditionStatement.ConditionType.SWITCH, False)
+                        condition = ConditionStatement(control + "==" + expression,
+                                                       ConditionStatement.ConditionType.SWITCH, False)
                         condition.line, condition.column = match.line, match.col
                         conditions.append(condition)
                     else:
-                        condition = ConditionStatement("", 
-                            ConditionStatement.ConditionType.SWITCH, True)
+                        condition = ConditionStatement("",
+                                                       ConditionStatement.ConditionType.SWITCH, True)
                         condition.line, condition.column = match.line, match.col
                         conditions.append(condition)
 
@@ -1244,19 +1325,19 @@ class PuppetParser(p.Parser):
         elif (isinstance(codeelement, puppetmodel.Selector)):
             control = PuppetParser.__process_codeelement(codeelement.control, path, code)
             conditions = []
-        
+
             for key, value in codeelement.hash.value.items():
                 key = PuppetParser.__process_codeelement(key, path, code)
                 value = PuppetParser.__process_codeelement(value, path, code)
 
                 if key != "default":
-                    condition = ConditionStatement(control + "==" + key, 
-                        ConditionStatement.ConditionType.SWITCH, False)
+                    condition = ConditionStatement(control + "==" + key,
+                                                   ConditionStatement.ConditionType.SWITCH, False)
                     condition.line, condition.column = codeelement.hash.line, codeelement.hash.col
                     conditions.append(condition)
                 else:
-                    condition = ConditionStatement("", 
-                        ConditionStatement.ConditionType.SWITCH, True)
+                    condition = ConditionStatement("",
+                                                   ConditionStatement.ConditionType.SWITCH, True)
                     condition.line, condition.column = codeelement.hash.line, codeelement.hash.col
                     conditions.append(condition)
                 condition.add_statement(PuppetParser.__process_codeelement(codeelement.hash, path, code))
@@ -1293,7 +1374,7 @@ class PuppetParser(p.Parser):
             res = []
             op1 = PuppetParser.__process_codeelement(codeelement.op1, path, code)
             op2 = PuppetParser.__process_codeelement(codeelement.op2, path, code)
-            if isinstance(op1, list): res += op1 
+            if isinstance(op1, list): res += op1
             else: res.append(op1)
             if isinstance(op2, list): res += op2
             else: res.append(op2)
@@ -1304,7 +1385,7 @@ class PuppetParser(p.Parser):
             return ""
         else:
             return codeelement
-        
+
     def parse_module(self, path: str) -> Module:
         res: Module = Module(os.path.basename(os.path.normpath(path)), path)
         super().parse_file_structure(res.folder, path)
@@ -1320,7 +1401,7 @@ class PuppetParser(p.Parser):
     def parse_file(self, path: str, type: UnitBlockType) -> UnitBlock:
         unit_block: UnitBlock = UnitBlock(os.path.basename(path), UnitBlockType.script)
         unit_block.path = path
-        
+
         try:
             with open(path) as f:
                 parsed_script, comments = parse_puppet(f.read())
@@ -1339,7 +1420,7 @@ class PuppetParser(p.Parser):
                     unit_block
                 )
         except:
-           throw_exception(EXCEPTIONS["PUPPET_COULD_NOT_PARSE"], path)
+            throw_exception(EXCEPTIONS["PUPPET_COULD_NOT_PARSE"], path)
 
         return unit_block
 
@@ -1347,8 +1428,8 @@ class PuppetParser(p.Parser):
         res: Project = Project(os.path.basename(os.path.normpath(path)))
 
         if os.path.exists(f"{path}/modules") and not os.path.islink(f"{path}/modules"):
-            subfolders = [f.path for f in os.scandir(f"{path}/modules") 
-                if f.is_dir() and not f.is_symlink()]
+            subfolders = [f.path for f in os.scandir(f"{path}/modules")
+                          if f.is_dir() and not f.is_symlink()]
             for m in subfolders:
                 res.add_module(self.parse_module(m))
 
@@ -1357,8 +1438,8 @@ class PuppetParser(p.Parser):
             if f.is_file() and len(name_split) == 2 and name_split[-1] == "pp":
                 res.add_block(self.parse_file(f.path, ""))
 
-        subfolders = [f.path for f in os.scandir(f"{path}") 
-            if f.is_dir() and not f.is_symlink()]
+        subfolders = [f.path for f in os.scandir(f"{path}")
+                      if f.is_dir() and not f.is_symlink()]
         for d in subfolders:
             if os.path.basename(os.path.normpath(d)) not \
                     in ["modules"]:

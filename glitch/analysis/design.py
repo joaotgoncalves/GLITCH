@@ -19,8 +19,8 @@ class DesignVisitor(RuleVisitor):
                     if (identation is None):
                         identation = curr_id
                     elif (identation != curr_id):
-                        return [Error('implementation_improper_alignment', 
-                            element, file, repr(element))]
+                        return [Error('implementation_improper_alignment',
+                                      element, file, repr(element))]
 
                 return []
             return []
@@ -47,18 +47,18 @@ class DesignVisitor(RuleVisitor):
                     longest_split = split
             if longest_split == "": return []
             elif len(longest_split) - 1 != len(longest_split.rstrip()):
-                return [Error('implementation_improper_alignment', 
-                    element, file, repr(element))]
+                return [Error('implementation_improper_alignment',
+                              element, file, repr(element))]
 
             for a in element.attributes:
                 first_line = lines[a.line - 1]
                 cur_arrow_column = len(first_line.split('=>')[0])
                 if cur_arrow_column != longest_ident:
-                    return [Error('implementation_improper_alignment', 
+                    return [Error('implementation_improper_alignment',
                             element, file, repr(element))]
 
             return []
-    
+
     class AnsibleImproperAlignmentSmell(SmellChecker):
         # YAML does not allow improper alignments (it also would have problems with generic attributes for all modules)
         def check(self, element: AtomicUnit, file: str):
@@ -155,7 +155,7 @@ class DesignVisitor(RuleVisitor):
             for au in ub.atomic_units:
                 if au.type in DesignVisitor.__EXEC:
                     count_execs += 1
-            
+
             for unitblock in ub.unit_blocks:
                 resources, execs = count_atomic_units(unitblock)
                 count_resources += resources
@@ -174,13 +174,13 @@ class DesignVisitor(RuleVisitor):
 
         self.first_non_comm_line = inf
         for i, line in enumerate(code_lines):
-            if not line.startswith(self.comment): 
+            if not line.startswith(self.comment):
                 self.first_non_comm_line = i + 1
-                break 
+                break
 
         self.variable_stack.append(len(self.variables_names))
         for attr in u.attributes:
-           self.variables_names.append(attr.name)
+            self.variables_names.append(attr.name)
 
         errors = []
         # The order is important
@@ -204,18 +204,27 @@ class DesignVisitor(RuleVisitor):
 
         for i, line in enumerate(code_lines):
             if ("\t" in line):
-                error = Error('implementation_improper_alignment', 
-                    u, u.path, repr(u))
+                error = Error('implementation_improper_alignment',
+                              u, u.path, repr(u))
                 error.line = i + 1
                 errors.append(error)
             if len(line) > 140:
                 error = Error('implementation_long_statement', u, u.path, line)
                 error.line = i + 1
                 errors.append(error)
-        
+
+        def count_variables(vars: list[Variable]):
+            count = 0
+            for var in vars:
+                if isinstance(var.value, type(None)):
+                    count += count_variables(var.variables)
+                else:
+                    count += 1
+            return count
+
         # The UnitBlock should not be of type vars, because these files are supposed to only
         # have variables
-        if len(u.variables) / max(len(code_lines), 1) > 0.3 and u.type != UnitBlockType.vars:
+        if count_variables(u.variables) / max(len(code_lines), 1) > 0.3 and u.type != UnitBlockType.vars:
             errors.append(Error('implementation_too_many_variables', u, u.path, repr(u)))
 
         if DesignVisitor.__VAR_REFER_SYMBOL is not None:
@@ -311,7 +320,7 @@ class DesignVisitor(RuleVisitor):
                 for line in attr.code.split('\n'):
                     if line.strip() != "": lines += 1
 
-            if lines > 7: 
+            if lines > 7:
                 errors.append(Error("design_long_resource", au, file, repr(au)))
 
         return errors
